@@ -33,7 +33,7 @@ use Data::Dumper;
 our %Options = ();
 $Options{'new_incident'} = 1;
 $Options{'icingaweb2_url'} = 'http://10.122.30.40/icingaweb2';
-$Options{'servicenow_url'} = 'https://steriadev.service-now.com';
+$Options{'servicenow_url'} = 'https://companydev.service-now.com';
 $Options{'servicenow_username'} = 'servicenow'; 
 $Options{'servicenow_password'} = 'change_me'; 
 
