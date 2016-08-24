@@ -33,18 +33,17 @@ use Data::Dumper;
 our %Options = ();
 $Options{'new_incident'} = 1;
 $Options{'icingaweb2_url'} = 'http://10.122.30.40/icingaweb2';
-$Options{'servicenow_url'} = 'https://companydev.service-now.com';
-$Options{'servicenow_username'} = 'servicenow'; 
-$Options{'servicenow_password'} = 'change_me'; 
+$Options{'servicenow_url'} = 'https://yourcompany.service-now.com';
+$Options{'servicenow_username'} = 'monitoring'; 
+$Options{'servicenow_password'} = 'monitoring'; 
 
 $Options{'mysql_host'}     = '127.0.0.1';
 $Options{'mysql_port'}     = '3306';
 $Options{'mysql_db'}       = 'icinga';
 $Options{'mysql_user'}     = 'icinga';
 $Options{'mysql_passwd'}   = 'icinga';
-# ACK sleep
-# teh time achnoledge waits on icinga
-$Options{'ack_sleep_time'}   = 1;
+# Time to give to icinga to write comments
+$Options{'sleep_time'}   = 1;
 
 # Alle benutzten ENV VARIABELN
 $Options{'icinga_env_vars' } = [
@@ -123,6 +122,8 @@ GetOptions(\%Options,
 # store the environment
 foreach my $key (keys(%ENV)) {
 	    $Options{'ENV'}{$key} = $ENV{$key}; 
+
+#		warn "$key =>>>>>> $ENV{$key}" . "\n";
 }
 
 # move some variables
@@ -131,6 +132,7 @@ foreach my $var (@{$Options{'icinga_env_vars'}}) {
 	     $Options{'ENV'}{$var} = $Options{$var};
 	}
 }
+
 
 #===============================================================================
 # SEARCH IN MYSQL FOR MAGIC_COOKIE
@@ -146,7 +148,6 @@ my $IcingaMySQL = IcingaMySQL->new();
 #===============================================================================
 %Options = $IcingaMySQL->check_ack(\%Options);
 
-
 #===============================================================================
 # SERVICE NOW REST API
 #===============================================================================
@@ -158,32 +159,41 @@ my $ServiceNowREST = ServiceNowREST->new();
 # delete mysql ticket
 # if there is no correlation in servicenow
 if ( defined($Options{'IcingaMySQL'}{'sys_id'}) and not defined ($Options{'get_json_result'}{'sys_id'}) ) {
-	    %Options = $IcingaMySQL->delete_magic_cookie(\%Options);
-		warn "$0 :: incident(deleted): " 
-		. $Options{'IcingaMySQL'}{'number'} 
-		. " :: " 
-		. $Options{'ENV'}{'SERVICESTATE'} 
-		. " :: " 
-		. $Options{'ENV'}{'HOSTDISPLAYNAME'} 
-		. " :: " . $Options{'ENV'}{'SERVICEDISPLAYNAME'} . "\n";
+	%Options = $IcingaMySQL->delete_magic_cookie(\%Options);
+	warn "$0 :: incident(deleted): " 
+	. $Options{'IcingaMySQL'}{'number'} 
+	. " :: " 
+	. $Options{'ENV'}{'SERVICESTATE'} 
+	. " :: " 
+	. $Options{'ENV'}{'HOSTDISPLAYNAME'} 
+	. " :: " . $Options{'ENV'}{'SERVICEDISPLAYNAME'} . "\n";
 }
 
 # print Dumper(%Options);
 if ($Options{'get_json_result'}{'sys_id'}) {
 
+	#===============================================================================
+	# GET COMMENTS IN MYSQL
+	#===============================================================================
+	%Options = $IcingaMySQL->get_icinga_comments(\%Options);
+	%Options = $ServiceNowREST->add_new_comments(\%Options);
+
+	#===============================================================================
+	# UPDATE INCIDENTS
+	#===============================================================================
 	%Options = $ServiceNowREST->update_incident(\%Options);
 
 	# Check if incident was created
 	if ($Options{'update_incident'}{'number'}) {
 		warn "$0 :: incident(updated): " . $Options{'update_incident'}{'number'} . " :: " . $Options{'ENV'}{'SERVICESTATE'} . " :: " . $Options{'ENV'}{'HOSTDISPLAYNAME'} . " :: " . $Options{'ENV'}{'SERVICEDISPLAYNAME'} . "\n";
 	} else {
-        die "$0 :: incident(update error): \$Options{update_incident}{number}" . "\n";
+		die "$0 :: incident(update error): \$Options{update_incident}{number}" . "\n";
 	}
 	
 	if ( $Options{'ENV'}{'SERVICESTATE'} eq 'OK' and defined($Options{'new_incident'}) ) {
 
 		# delete it
-	    %Options = $IcingaMySQL->delete_magic_cookie(\%Options);
+		%Options = $IcingaMySQL->delete_magic_cookie(\%Options);
 
 		if ($Options{'delete_magic_cookie'}{'status'}) {
 			warn "$0 :: incident(deleted): " . $Options{'update_incident'}{'number'} . " :: " . $Options{'ENV'}{'SERVICESTATE'} . " :: " . $Options{'ENV'}{'HOSTDISPLAYNAME'} . " :: " . $Options{'ENV'}{'SERVICEDISPLAYNAME'} . "\n";
@@ -194,6 +204,7 @@ if ($Options{'get_json_result'}{'sys_id'}) {
 
 } else {
 
+	# ONLY IF NOT OK
 	if ($Options{'ENV'}{'SERVICESTATE'} ne 'OK' ) {
 		# create incident
 		%Options = $ServiceNowREST->post_incident(\%Options);
@@ -207,10 +218,12 @@ if ($Options{'get_json_result'}{'sys_id'}) {
 
 		# create magic cookie 
 		%Options = $IcingaMySQL->create_magic_cookie(\%Options);
-	
+
+	###### IF OK #########
 	} else {
 			warn "$0 :: no incident(OK) \n";
 	}
+
 }
 
 exit 0;

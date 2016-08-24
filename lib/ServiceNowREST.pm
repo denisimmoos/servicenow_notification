@@ -80,12 +80,86 @@ our %priority = (
 );
 
 
+sub add_new_comments {
 
+   my $self        = shift;
+    my $ref_Options = shift;
+    my %Options = %{ $ref_Options };
+    my $caller = (caller(0))[3];
+    my %json_result = ();
+
+	# give some time
+	sleep $Options{'sleep_time'};
+
+
+	#http://search.cpan.org/~mcrawfor/REST-Client/lib/REST/Client.pm
+	# Example install using cpanm:
+	#   sudo cpanm -i REST::Client
+	my $rest_client = REST::Client->new( host => $Options{'servicenow_url'}) or &error;
+	my $encoded_auth = encode_base64("$Options{'servicenow_username'}:$Options{'servicenow_password'}", '') or &error;
+
+	#https://steriadev.service-now.com/api/now/table/sys_journal_field?sysparm_query=element_id=bba857754f11ea003ba9ca1f0310c7f8&element=comments 
+	if ($Options{'get_json_result'}{'sys_id'}) {
+		$rest_client->GET(  "/api/now/table/sys_journal_field?sysparm_query=element_id=$Options{'get_json_result'}{'sys_id'}\&element=comments", {'Authorization' => "Basic $encoded_auth", 'Accept' => 'application/json'});
+	}
+
+
+
+	# JSON
+	my $json = JSON->new;
+	my $json_result = $json->decode($rest_client->responseContent());
+	%json_result = %{ $json_result } ;
+	
+	my @json_results;
+
+		# json_results
+		foreach my $hash ( @{  $json_result{'result'} }) {
+			%json_result = %{ $hash };
+			push(@json_results,$json_result{'value'});
+		}
+
+
+
+		# get_icinga_comments
+		my $match;
+		chomp(@json_results);
+		my %template;
+		my $json_request_body;
+
+		foreach my $key ( keys %{ $Options{'get_icinga_comments'} } ) {
+
+			# UNBEDINGT ZEIT NOCH MATCHEN
+		   $match = "$Options{'get_icinga_comments'}{$key}{'comment_time'}";
+		   chomp($match);
+
+		   # delete keys which are already available as comment
+		   # vers loose match
+		   if ( not grep ( /.*$match.*/ , @json_results) ) {
+		      
+			  # trash removal
+			  # ersetzen von \r\n nach \n 
+			  $Options{'get_icinga_comments'}{$key}{'comment_data'} =~ s/\\r\\n/\n/g;
+
+			  %template = (
+			   comments => "ICINGA (comment_id): $Options{'get_icinga_comments'}{$key}{'comment_id'}" . "\n"
+			               . "ICINGA (comment_time): $Options{'get_icinga_comments'}{$key}{'comment_time'}" . "\n"
+			               . "ICINGA (author_name): $Options{'get_icinga_comments'}{$key}{'author_name'}" . "\n"
+			               . "ICINGA (comment_data): " ."\n\n" 
+						   . $Options{'get_icinga_comments'}{$key}{'comment_data'},
+			  ); 
+              
+			  $json_request_body = $json->encode(\%template);
+			  $json_result = $rest_client->PATCH("/api/now/table/incident/$Options{'get_json_result'}{'sys_id'}", 
+				   $json_request_body, {'Authorization' => "Basic $encoded_auth", 'Content-Type' => 'application/json', 'Accept' => 'application/json'}); 
+		   }
+          
+		}
+	return %Options;	
+}
 
 #
 # get_json_result
 #
-
 
 sub get_json_result {
 
@@ -111,9 +185,6 @@ sub get_json_result {
         my $json_result = $json->decode($rest_client->responseContent());
 
         %json_result = %{ $json_result } ;
-
-
-		use Data::Dumper;
 
 		# if there are results
 		if (@{  $json_result{'result'} }){
@@ -150,7 +221,7 @@ sub post_incident {
 		state => 1,
 		company => $Options{'ENV'}{'COMPANY'},
 		assignment_group => $Options{'ENV'}{'ASSIGNMENT_GROUP'}, 
-		caller_id => 'fwel',  
+		caller_id => $Options{'servicenow_username'},  
 		impact => $impact{$Options{'ENV'}{'SERVICESTATE'}},  
 		urgency => $urgency{$Options{'ENV'}{'SERVICESTATE'}},  
 		priority => $priority{$Options{'ENV'}{'SERVICESTATE'}},  
@@ -172,6 +243,10 @@ sub post_incident {
 		#
 
 		if ($Options{'check_ack'}{'comment_data'} ) {
+                 
+			# \r \n -> \n 
+			$Options{'check_ack'}{'comment_data'} =~ s/\\r\\n/\n/g;
+
 			$template{'state'} =  $state{'ACK'};
 			$template{'short_description'} = "ACK :: " . $Options{'ENV'}{'SERVICESTATE'} . " :: " . $Options{'ENV'}{'HOSTDISPLAYNAME'} . " :: " . $Options{'ENV'}{'SERVICEDISPLAYNAME'};
 		    $template{'description'} = 
@@ -232,7 +307,8 @@ sub update_incident {
 		urgency    => $urgency{$Options{'ENV'}{'SERVICESTATE'}},  
 		priority   => $priority{$Options{'ENV'}{'SERVICESTATE'}},  
 		short_description => $Options{'ENV'}{'SERVICESTATE'} . " :: " . $Options{'ENV'}{'HOSTDISPLAYNAME'} . " :: " . $Options{'ENV'}{'SERVICEDISPLAYNAME'} ,  
-		description =>    "\n"  . "HOSTADDRESS: " . $Options{'ENV'}{'HOSTADDRESS'}  
+		# updates added as comments
+		comments =>    "\n"  . "HOSTADDRESS: " . $Options{'ENV'}{'HOSTADDRESS'}  
 					    . "\n" .  "LONGDATETIME: "  . $Options{'ENV'}{'LONGDATETIME'}  
 					    . "\n" .  "SERVICEOUTPUT: " 
 		                . "\n" .  $Options{'ENV'}{'SERVICEOUTPUT'}
@@ -248,13 +324,14 @@ sub update_incident {
 	if ($Options{'check_ack'}{'comment_data'} ) {
 		$template{'state'} =  $state{'ACK'};
 		$template{'short_description'} = "ACK :: " . $Options{'ENV'}{'SERVICESTATE'} . " :: " . $Options{'ENV'}{'HOSTDISPLAYNAME'} . " :: " . $Options{'ENV'}{'SERVICEDISPLAYNAME'};
-		$template{'description'} = 
+		$template{'comments'} = 
 					 "\n"  . "ACK: " . $Options{'check_ack'}{'comment_data'}
 					. "\n\n"  . "HOSTADDRESS: " . $Options{'ENV'}{'HOSTADDRESS'}  
 					. "\n" .  "LONGDATETIME: "  . $Options{'ENV'}{'LONGDATETIME'}  
 					. "\n" .  "SERVICEOUTPUT: " 
 					. "\n" .  $Options{'ENV'}{'SERVICEOUTPUT'}
 					. "\n";  
+
 	}
 
 	my $rest_client = REST::Client->new( host => $Options{'servicenow_url'}) or &error;
@@ -266,16 +343,20 @@ sub update_incident {
 	my $json_result = $rest_client->PATCH("/api/now/table/incident/$Options{'get_json_result'}{'sys_id'}", 
 	   $json_request_body, {'Authorization' => "Basic $encoded_auth", 'Content-Type' => 'application/json', 'Accept' => 'application/json'}); 
 													   
+
     # get the resule
 	$json_result = $json_result->responseContent;
 	
 	#
 	# umwursteln in HASH
 	#
-	$json_result = $json->decode($json_result);
-	
-	# result hash
-	%json_result = %{ $json_result };
+	if ($json_result) {
+
+		$json_result = $json->decode($json_result);
+		
+		# result hash
+		%json_result = %{ $json_result };
+	}
 
 	# collect return values
 	foreach my $key (keys %{ $json_result{'result'} } ) {

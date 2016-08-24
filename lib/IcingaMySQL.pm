@@ -44,6 +44,55 @@ sub verbose {
 
 use DBI;
 
+sub get_icinga_comments {
+
+	my $self        = shift;
+	my $ref_Options = shift;
+	my %Options = %{ $ref_Options };
+	my $caller = (caller(0))[3];
+	my $sql;
+
+	$sql= "SELECT comment_id,comment_time,author_name,comment_data FROM icinga_comments WHERE 
+		   endpoint_object_id = ( 
+			  SELECT endpoint_object_id FROM icinga_notifications 
+			  WHERE 
+		      object_id = (
+		                SELECT object_id FROM `icinga_objects` WHERE 
+					              name1 = '$Options{'ENV'}{'HOSTDISPLAYNAME'}'
+							                AND
+										              name2 = '$Options{'ENV'}{'SERVICEDISPLAYNAME'}' 
+												  )
+											  ORDER by end_time DESC
+										  LIMIT 1
+									  ) 
+						AND
+						name NOT LIKE '%servicenow%'
+						AND 
+						name LIKE '%$Options{'ENV'}{'SERVICEDISPLAYNAME'}%'
+						ORDER BY entry_time DESC
+		";
+
+	my $dbh = DBI->connect("dbi:mysql:database=$Options{'mysql_db'};host=$Options{'mysql_host'};port=$Options{'mysql_port'}", $Options{'mysql_user'}, $Options{'mysql_passwd'} )
+	          or die( $DBI::errstr . "\n");
+
+     my $sth = $dbh->prepare($sql);
+	 my $status = $sth->execute;
+
+	# save status for later use
+	my $counter = 0;
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$Options{'get_icinga_comments'}{$counter} = $row;
+        $counter++;
+	}
+
+	$dbh->disconnect;
+	return %Options;
+}
+
+#
+# check_ack
+#
+
 sub check_ack {
 	my $self        = shift;
 	my $ref_Options = shift;
@@ -51,7 +100,7 @@ sub check_ack {
 	my $caller = (caller(0))[3];
 	my $sql;
 
-	sleep $Options{'ack_sleep_time'};
+	sleep $Options{'sleep_time'};
 	
 	$sql= "SELECT comment_data FROM icinga_comments WHERE 
 		         object_id = (
